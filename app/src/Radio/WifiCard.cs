@@ -28,6 +28,35 @@ public static class WifiCard
     public const string Signer = "winawdl driver (signed on this PC)";
     public const string InfName = "winawdl_regproxy.inf";
 
+    /// <summary>The entry point the startup task, the installers and the app's "Give Wi-Fi back" run.</summary>
+    public const string GiveBackFlag = "--give-wifi-back";
+
+    /// <summary>Gives the card back if winawdl's driver has it, and says what was done in wifi.log.
+    /// Returns 0 when Wi-Fi has the card (or there is none), 1 when it could not be given back.</summary>
+    public static int GiveBackNow(ICard card, string logs)
+    {
+        Directory.CreateDirectory(logs);
+        void Say(string line) =>
+            File.AppendAllLines(Path.Combine(logs, "wifi.log"), [$"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {line}"]);
+        var holder = card.Holder();
+        if (holder != CardHolder.Winawdl)
+        {
+            Say($"nothing to give back ({(holder == CardHolder.Wifi ? "Wi-Fi has the card" : "no card")})");
+            return 0;
+        }
+        try
+        {
+            card.GiveBack();
+            Say("gave Wi-Fi back");
+            return 0;
+        }
+        catch (CardException error)
+        {
+            Say($"could not give Wi-Fi back: {error.Message}");
+            return 1;
+        }
+    }
+
     public static string PackageInf(string root) => Path.Combine(root, "driver", InfName);
 
     /// <summary>Published names (oemNN.inf) of the installed copy's packages, from `pnputil /enum-drivers /format xml`.</summary>

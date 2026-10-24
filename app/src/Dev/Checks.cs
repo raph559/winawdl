@@ -477,6 +477,23 @@ public static class Checks
                && !WifiCard.StartedWithWifi(Card("oem92.inf", "Problem"), store)
                && !WifiCard.StartedWithWifi(Card("oem66.inf", "Started"), store),
                "Wi-Fi is back only once its own driver has the card and Windows has started it");
+
+        // --give-wifi-back, as the startup task, the installer and the app's press run it.
+        var logs = Path.Combine(Path.GetTempPath(), $"winawdl-check-wifi-{Environment.ProcessId}");
+        Directory.CreateDirectory(logs);
+        string Last() => File.ReadAllLines(Path.Combine(logs, "wifi.log")).Last();
+        var held = new ScriptedCard { Now = CardHolder.Winawdl };
+        Expect(WifiCard.GiveBackNow(held, logs) == 0 && held.Calls is ["give back"] && Last().EndsWith("gave Wi-Fi back"),
+               $"winawdl's driver has the card -> it is given back: \"{Last()}\"");
+        var free = new ScriptedCard { Now = CardHolder.Wifi };
+        var none = new ScriptedCard { Now = CardHolder.Missing };
+        Expect(WifiCard.GiveBackNow(free, logs) == 0 && free.Calls.Count == 0
+               && WifiCard.GiveBackNow(none, logs) == 0 && none.Calls.Count == 0,
+               "Wi-Fi already has the card, or there is none -> nothing is done");
+        var failing = new ScriptedCard { Now = CardHolder.Winawdl, GiveBackFails = "x" };
+        Expect(WifiCard.GiveBackNow(failing, logs) == 1 && Last().EndsWith("could not give Wi-Fi back: x"),
+               $"it cannot be given back -> exit 1, and the log says why: \"{Last()}\"");
+        Directory.Delete(logs, recursive: true);
     }
 
     private static void Supervisor(string logs)

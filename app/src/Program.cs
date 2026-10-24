@@ -25,6 +25,7 @@ public static class Program
         [Dev.Stage.Flag, .. var rest] => Dev.Stage.Run(rest),
         [Dev.Drive.Flag, .. var rest] => Dev.Drive.Run(rest),
         [Dev.Checks.Flag, .. var rest] => Dev.Checks.Run(rest),
+        [WifiCard.GiveBackFlag] => WifiCard.GiveBackNow(new WindowsCard(), RadioSupervisor.LogFolder),
         _ => RunApp(args),
     };
 
