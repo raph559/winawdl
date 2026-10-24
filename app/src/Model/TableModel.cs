@@ -122,8 +122,9 @@ public sealed class TableModel : Observable
             if (_linkUp) return Across.Nearby;
             return _radio.Phase switch
             {
-                RadioPhase.Starting => Across.RadioStarting,
-                RadioPhase.Refused or RadioPhase.NotBuilt or RadioPhase.Failed => Across.RadioProblem,
+                RadioPhase.Starting or RadioPhase.TakingCard => Across.RadioStarting,
+                RadioPhase.Refused or RadioPhase.NotBuilt or RadioPhase.Failed or RadioPhase.WifiLeftOff
+                    => Across.RadioProblem,
                 _ => Across.RadioOff,
             };
         }
@@ -141,39 +142,57 @@ public sealed class TableModel : Observable
         Across.RadioProblem => _radio.Phase switch
         {
             RadioPhase.Refused => "The radio stayed off",
+            RadioPhase.WifiLeftOff => "Wi-Fi is still off",
             RadioPhase.NotBuilt => _radio.FromSource
                 ? "The radio has not been built yet"
                 : "The radio's programs are missing",
             _ => _radioHasRun ? "The radio stopped" : "The radio did not start",
         },
-        _ => _radio.Phase == RadioPhase.Stopping ? "Stopping the radio" : "The radio is off",
+        _ => _radio.Phase switch
+        {
+            RadioPhase.Stopping => "Stopping the radio",
+            RadioPhase.GivingBack => "Giving Wi-Fi back",
+            _ => "The radio is off",
+        },
     };
 
     public string PanelBody => Across switch
     {
         Across.EngineDown => _engineDetail,
-        Across.RadioStarting => _radio.LastLine.Length > 0
-            ? _radio.LastLine
-            : "The Wi-Fi card is being set up for AirDrop.",
+        Across.RadioStarting => _radio.Phase == RadioPhase.TakingCard
+            ? "Taking the Wi-Fi card from Windows. Wi-Fi is off until the radio is turned off."
+            : _radio.LastLine.Length > 0
+                ? _radio.LastLine
+                : "The Wi-Fi card is being set up for AirDrop.",
         Across.RadioProblem => _radio.Phase switch
         {
             RadioPhase.Refused => "Windows asked for permission and the answer was no.",
+            RadioPhase.WifiLeftOff => $"{_radio.LastLine} Restarting the PC also gives it back.",
             RadioPhase.NotBuilt => _radio.FromSource
                 ? "Run scripts\\build-radio.ps1 and scripts\\build-awdl.ps1 in the repository, then try again."
                 : "This copy of winawdl is incomplete. Install it again.",
             _ => _radio.LastLine.Length > 0 ? _radio.LastLine : "It left nothing in its log.",
         },
-        _ => _radio.Phase == RadioPhase.Stopping
-            ? ""
-            : "Turn it on to see nearby iPhones, iPads and Macs, and to be seen by them. "
-              + "Windows asks for permission first.",
+        _ => _radio.Phase switch
+        {
+            RadioPhase.Stopping => "",
+            RadioPhase.GivingBack => "The radio has stopped. The Wi-Fi card is going back to Windows.",
+            _ => "Turn it on to see nearby iPhones, iPads and Macs, and to be seen by them. "
+                 + (_radio.SwapsCard ? "It uses the Wi-Fi card, so Wi-Fi is off while the radio is on. " : "")
+                 + "Windows asks for permission first.",
+        },
     };
 
     public string PanelActionLabel => Across switch
     {
         Across.EngineDown => "Start it again",
-        Across.RadioOff => _radio.Phase == RadioPhase.Stopping ? "" : "Turn on the radio",
-        Across.RadioProblem => _radio.Phase == RadioPhase.Refused ? "Turn on the radio" : "Try again",
+        Across.RadioOff => _radio.Phase is RadioPhase.Stopping or RadioPhase.GivingBack ? "" : "Turn on the radio",
+        Across.RadioProblem => _radio.Phase switch
+        {
+            RadioPhase.Refused => "Turn on the radio",
+            RadioPhase.WifiLeftOff => "Give Wi-Fi back",
+            _ => "Try again",
+        },
         _ => "",
     };
 
@@ -185,6 +204,7 @@ public sealed class TableModel : Observable
     private void RunPanelAction()
     {
         if (Across == Across.EngineDown) StartTheEngine();
+        else if (_radio.Phase == RadioPhase.WifiLeftOff) _radio.GiveWifiBack();
         else RadioOn = true;
     }
 
@@ -197,12 +217,14 @@ public sealed class TableModel : Observable
     /// <summary>The radio switch. It also reads as on while the radio starts.</summary>
     public bool RadioOn
     {
-        get => _linkUp || _radio.Phase is RadioPhase.Starting or RadioPhase.Running;
+        get => _linkUp || _radio.Phase is RadioPhase.TakingCard or RadioPhase.Starting or RadioPhase.Running;
         set
         {
             _radioNotice = "";
-            if (value && !RadioOn) _radio.Start();
-            else if (!value && _radio.Phase is RadioPhase.Starting or RadioPhase.Running) _radio.Stop();
+            // While the radio stops and Wi-Fi goes back, the card is still moving: nothing starts.
+            if (value && !RadioOn && _radio.Phase is not (RadioPhase.Stopping or RadioPhase.GivingBack)) _radio.Start();
+            else if (!value && _radio.Phase is RadioPhase.TakingCard or RadioPhase.Starting or RadioPhase.Running)
+                _radio.Stop();
             else if (!value && _linkUp)
                 _radioNotice = "The radio was started from a terminal. Stop it there with Ctrl+C.";
             Refresh();
@@ -684,7 +706,13 @@ public sealed class TableModel : Observable
                     PeerState.Sent => $"{peer.Status} to {peer.Name}",
                     _ => $"Sending to {peer.Name}: {peer.Status}",
                 });
-            if (lines.Count == 0) lines.Add(Presence);
+            if (lines.Count == 0)
+                lines.Add(_radio.Phase switch
+                {
+                    RadioPhase.GivingBack => "Giving Wi-Fi back",
+                    RadioPhase.WifiLeftOff => "Wi-Fi is still off",
+                    _ => Presence,
+                });
             var text = "winawdl\n" + string.Join("\n", lines);
             // Windows cuts what it shows there at 127 characters.
             return text.Length <= MostTrayText ? text : text[..(MostTrayText - 1)] + "…";

@@ -255,6 +255,7 @@ public static class Checks
                "the photo says it is a Live Photo, and Play the video opens its video (recorded)");
         Expect(model.Received.First(file => file.Name == "note.txt") is { HasVideo: false, Hint: "note.txt" }, "any other file has no video to play");
 
+        Handover(app);
         Always(app);
         Requests(app);
     }
@@ -264,6 +265,43 @@ public static class Checks
         @event = "asked", id, sender, model, links = 0, total = 5, waits,
         files = new[] { new { name = "a.jpg", size = 5, type = "public.jpeg" } },
     };
+
+    /// <summary>What the window says while the Wi-Fi card moves, in an installed copy.</summary>
+    private static void Handover(Application app)
+    {
+        const string plainOff = "Turn it on to see nearby iPhones, iPads and Macs, and to be seen by them. "
+                                + "Windows asks for permission first.";
+        var world = Stage.NewWorld(app.Dispatcher);
+        world.Radio.SwapsCard = true;
+        var view = Show(world);
+        var model = world.Model;
+        Expect(model.PanelTitle == "The radio is off" && model.PanelActionLabel == "Turn on the radio"
+               && model.PanelBody == "Turn it on to see nearby iPhones, iPads and Macs, and to be seen by them. It uses the "
+                                     + "Wi-Fi card, so Wi-Fi is off while the radio is on. Windows asks for permission first.",
+               $"off, installed -> it says the radio turns Wi-Fi off: \"{model.PanelBody}\"");
+        world.Radio.Become(RadioPhase.TakingCard);
+        Expect(model.Across == Across.RadioStarting && model.RadioOn && model.PanelTitle == "Starting the radio" && !model.PanelHasAction
+               && model.PanelBody == "Taking the Wi-Fi card from Windows. Wi-Fi is off until the radio is turned off.",
+               $"taking the card -> \"{model.PanelTitle}\": \"{model.PanelBody}\"");
+        world.Radio.Become(RadioPhase.GivingBack);
+        Expect(model.Across == Across.RadioOff && model.PanelTitle == "Giving Wi-Fi back" && !model.PanelHasAction
+               && model.PanelBody == "The radio has stopped. The Wi-Fi card is going back to Windows."
+               && model.TrayText == "winawdl\nGiving Wi-Fi back",
+               $"giving it back -> \"{model.PanelTitle}\": \"{model.PanelBody}\", icon \"{model.TrayText.Replace("\n", " / ")}\"");
+        var starts = world.Radio.Starts;
+        model.RadioOn = true;
+        Expect(world.Radio.Starts == starts, "the switch flipped on while Wi-Fi is given back -> nothing starts until it is back");
+        world.Radio.Become(RadioPhase.WifiLeftOff, "Windows wants a restart to finish giving Wi-Fi back.");
+        Expect(model.Across == Across.RadioProblem && model.PanelTitle == "Wi-Fi is still off"
+               && model.PanelBody == "Windows wants a restart to finish giving Wi-Fi back. Restarting the PC also gives it back."
+               && model.PanelActionLabel == "Give Wi-Fi back" && model.PanelAsksWindows && !model.PanelHasLog
+               && model.TrayText == "winawdl\nWi-Fi is still off",
+               $"Wi-Fi left off -> \"{model.PanelTitle}\": \"{model.PanelBody}\", press \"{model.PanelActionLabel}\" with the shield");
+        Expect(Press(view, "Give Wi-Fi back") && world.Radio.GiveBacks == 1, "Give Wi-Fi back -> Windows is asked to give the card back");
+
+        var clone = Stage.NewWorld(app.Dispatcher);
+        Expect(clone.Model.PanelBody == plainOff, "run from a clone -> the off panel says nothing about Wi-Fi");
+    }
 
     /// <summary>A device whose requests are accepted without asking.</summary>
     private static void Always(Application app)

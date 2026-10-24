@@ -295,6 +295,22 @@ public static class Stage
         yield return ("radio-failed", world => world.Radio.Become(
             RadioPhase.Failed, "radio: could not get 6 locked 2 MiB blocks below 4 GiB"));
         yield return ("radio-refused", world => world.Radio.Become(RadioPhase.Refused));
+        yield return ("radio-off-installed", world => world.Radio.SwapsCard = true);
+        yield return ("radio-taking", world =>
+        {
+            world.Radio.SwapsCard = true;
+            world.Radio.Become(RadioPhase.TakingCard);
+        });
+        yield return ("radio-giving-back", world =>
+        {
+            world.Radio.SwapsCard = true;
+            world.Radio.Become(RadioPhase.GivingBack);
+        });
+        yield return ("wifi-left-off", world =>
+        {
+            world.Radio.SwapsCard = true;
+            world.Radio.Become(RadioPhase.WifiLeftOff, "Windows wants a restart to finish giving Wi-Fi back.");
+        });
         yield return ("engine-down", world => world.Engine.End("no_python", ""));
         yield return ("nobody", world =>
         {
