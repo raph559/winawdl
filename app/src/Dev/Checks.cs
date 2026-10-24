@@ -559,6 +559,23 @@ public static class Checks
                && !WifiCard.StartedWithWifi(Card("oem66.inf", "Started"), store),
                "Wi-Fi is back only once its own driver has the card and Windows has started it");
 
+        // Windows makes a new Wi-Fi adapter each time the card comes back, and files saved networks by adapter.
+        var day = new DateTime(2026, 10, 24);
+        ProfileFolder[] folders =
+        [
+            new("{OLDEST}", day.AddHours(1), 46), new("{BEFORE}", day.AddHours(2), 45),
+            new("{EMPTY}", day.AddHours(3), 0), new("{NOW}", day.AddHours(4), 0),
+        ];
+        string[] live = ["{NOW}"];
+        Expect(WifiCard.ProfilesSource("{OLDEST}", folders, live) == "{OLDEST}",
+               "the adapter Wi-Fi had before the radio took the card -> its saved networks come back");
+        Expect(WifiCard.ProfilesSource("{EMPTY}", folders, live) == "{BEFORE}"
+               && WifiCard.ProfilesSource(null, folders, live) == "{BEFORE}",
+               "that adapter had none, or none was noted -> the newest set left by an adapter that is gone");
+        Expect(WifiCard.ProfilesSource(null, [new("{NOW}", day, 12)], live) is null
+               && WifiCard.ProfilesSource(null, [new("{GONE}", day, 0)], live) is null,
+               "no adapter that is gone left any -> nothing is brought back, and the current one is never copied onto itself");
+
         // --give-wifi-back, as the startup task, the installer and the app's press run it.
         var logs = Path.Combine(Path.GetTempPath(), $"winawdl-check-wifi-{Environment.ProcessId}");
         Directory.CreateDirectory(logs);

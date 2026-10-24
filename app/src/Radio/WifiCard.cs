@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Net.NetworkInformation;
 using System.Xml.Linq;
+using Microsoft.Win32;
 
 namespace Winawdl.Radio;
 
@@ -117,7 +119,21 @@ public static class WifiCard
     public static bool StartedWithWifi(string devicesXml, string driversXml) =>
         HolderFrom(devicesXml, driversXml) == CardHolder.Wifi
         && (string?)XDocument.Parse(devicesXml).Descendants("Device").First().Element("Status") == "Started";
+
+    /// <summary>Whose saved networks a new Wi-Fi adapter gets: those of the adapter Wi-Fi had before
+    /// the radio took the card, or, if it had none or none was noted, the newest set left by an
+    /// adapter that is gone. Null when no adapter that is gone left any.</summary>
+    public static string? ProfilesSource(string? before, IReadOnlyList<ProfileFolder> folders, IReadOnlyCollection<string> live)
+    {
+        var gone = folders.Where(folder => folder.Count > 0 && !live.Contains(folder.Adapter, StringComparer.OrdinalIgnoreCase))
+                          .ToList();
+        return gone.FirstOrDefault(folder => string.Equals(folder.Adapter, before, StringComparison.OrdinalIgnoreCase))?.Adapter
+               ?? gone.OrderByDescending(folder => folder.Written).FirstOrDefault()?.Adapter;
+    }
 }
+
+/// <summary>The folder where Windows keeps one adapter's saved Wi-Fi networks.</summary>
+public sealed record ProfileFolder(string Adapter, DateTime Written, int Count);
 
 /// <summary>The card as Windows has it, moved with pnputil and newdev.dll.</summary>
 public sealed class WindowsCard : ICard
@@ -129,7 +145,14 @@ public sealed class WindowsCard : ICard
 
     public void Take(string inf)
     {
-        if (Holder() == CardHolder.Missing) throw new CardException("The Wi-Fi card was not found.");
+        var holder = Holder();
+        if (holder == CardHolder.Missing) throw new CardException("The Wi-Fi card was not found.");
+        // Wi-Fi's adapter goes with the card, and its saved networks are filed under it: noted to bring them back.
+        if (holder == CardHolder.Wifi && Adapter() is { } adapter)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(NotedAdapter)!);
+            File.WriteAllText(NotedAdapter, adapter);
+        }
         var (added, _) = PnpUtil("/add-driver", inf);
         if (added != 0)
             throw new CardException($"Windows would not take winawdl's driver (pnputil {added}). Its signature may not be trusted on this PC: install winawdl again.");
@@ -154,6 +177,88 @@ public sealed class WindowsCard : ICard
             if (clock.Elapsed > BackWithin) throw new CardException("The Wi-Fi card did not come back within 20 seconds.");
             Thread.Sleep(500);
         }
+        // Wi-Fi is back whatever happens to the saved networks: a failure there is only written down.
+        try
+        {
+            Say(CarryProfiles());
+        }
+        catch (Exception error)
+        {
+            Say($"saved networks not brought back: {error.Message}");
+        }
+    }
+
+    private static string NotedAdapter => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "winawdl", "wifi-adapter.txt");
+    private static string ProfileFolders => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Microsoft", "Wlansvc", "Profiles", "Interfaces");
+
+    private static void Say(string line) =>
+        File.AppendAllLines(Path.Combine(RadioSupervisor.LogFolder, "wifi.log"), [$"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {line}"]);
+
+    /// <summary>The adapter Windows made for the card (its NetCfgInstanceId), while Wi-Fi's driver has it.</summary>
+    private static string? Adapter()
+    {
+        var instance = (string?)XDocument.Parse(Devices()).Descendants("Device").FirstOrDefault()?.Attribute("InstanceId");
+        if (instance is null) return null;
+        using var device = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Enum\{instance}");
+        if (device?.GetValue("Driver") is not string driver) return null;
+        using var software = Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Control\Class\{driver}");
+        return software?.GetValue("NetCfgInstanceId") as string;
+    }
+
+    /// <summary>Gives the new adapter the saved networks of the one Wi-Fi had before (see WifiCard.ProfilesSource).</summary>
+    private static string CarryProfiles()
+    {
+        var noted = File.Exists(NotedAdapter) ? File.ReadAllText(NotedAdapter).Trim() : null;
+        File.Delete(NotedAdapter);
+        var clock = Stopwatch.StartNew();
+        string? adapter = null, name = null;
+        while ((adapter = Adapter()) is null
+               || (name = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(one => one.Id == adapter)?.Name) is null)
+        {
+            if (clock.Elapsed > BackWithin) return "saved networks not brought back: the new Wi-Fi adapter did not appear";
+            Thread.Sleep(500);
+        }
+        if (!Directory.Exists(ProfileFolders)) return "no saved networks to bring back";
+        var folders = Directory.GetDirectories(ProfileFolders)
+            .Select(folder => new ProfileFolder(Path.GetFileName(folder), Directory.GetLastWriteTimeUtc(folder),
+                                                Directory.GetFiles(folder, "*.xml").Length))
+            .ToList();
+        // A new adapter that already has saved networks is left as it is.
+        if (folders.Any(folder => folder.Adapter.Equals(adapter, StringComparison.OrdinalIgnoreCase) && folder.Count > 0))
+            return "the Wi-Fi adapter kept its saved networks";
+        var live = NetworkInterface.GetAllNetworkInterfaces().Select(one => one.Id).ToList();
+        if (WifiCard.ProfilesSource(noted, folders, live) is not { } source) return "no saved networks to bring back";
+        var files = new DirectoryInfo(Path.Combine(ProfileFolders, source)).GetFiles("*.xml")
+            .OrderBy(file => file.LastWriteTimeUtc).ToList();
+        var added = 0;
+        // Windows' Wi-Fi service may not know the new adapter for a moment yet: waited for once, not per network.
+        var patience = Stopwatch.StartNew();
+        foreach (var file in files)
+        {
+            bool taken;
+            while (!(taken = Netsh("wlan", "add", "profile", $"filename={file.FullName}", $"interface={name}", "user=all") == 0)
+                   && added == 0 && patience.Elapsed < TimeSpan.FromSeconds(10))
+                Thread.Sleep(1000);
+            if (taken) added++;
+            else if (added == 0) break; // the service never took one: the rest would not go either
+        }
+        return $"brought back {added} of {files.Count} saved networks from adapter {source}";
+    }
+
+    private static int Netsh(params string[] arguments)
+    {
+        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "netsh.exe"))
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        using var process = Process.Start(start)!;
+        process.StandardOutput.ReadToEnd();
+        process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return process.ExitCode;
     }
 
     private static string Devices() => PnpUtil("/enum-devices", "/deviceid", WifiCard.HardwareId, "/format", "xml").Output;
