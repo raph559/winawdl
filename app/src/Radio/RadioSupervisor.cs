@@ -50,8 +50,12 @@ public static class RadioSupervisor
                          LogFolder);
     }
 
-    /// <summary>Returns 0 after a stop that was asked for, 3 when a daemon ended by itself.</summary>
-    public static int Supervise(int ownerPid, string stopName, Daemon radio, Daemon awdl, string logs)
+    /// <summary>Returns 0 after a stop that was asked for, 3 when a daemon ended by itself, 4 when
+    /// the Wi-Fi card could not be taken, 5 when it could not be given back. With a card, it is
+    /// taken before the daemons start and given back once both have ended; radio.status says
+    /// which step is under way.</summary>
+    public static int Supervise(int ownerPid, string stopName, Daemon radio, Daemon awdl, string logs,
+                                ICard? card = null, string inf = "")
     {
         Directory.CreateDirectory(logs);
         var status = Path.Combine(logs, StatusFile);
@@ -65,6 +69,35 @@ public static class RadioSupervisor
         catch (ArgumentException)
         {
             return 2;
+        }
+
+        void Say(Dictionary<string, string> what) => File.WriteAllText(status, JsonSerializer.Serialize(what));
+        var wifi = card is null ? "untouched" : "back";
+        var why = "";
+        if (card is not null)
+        {
+            Say(new() { ["step"] = "taking" });
+            try
+            {
+                card.Take(inf);
+            }
+            catch (CardException error)
+            {
+                why = error.Message;
+                // Half taken: it goes back before anything else is tried.
+                try
+                {
+                    if (card.Holder() == CardHolder.Winawdl) card.GiveBack();
+                }
+                catch (CardException)
+                {
+                    wifi = "off";
+                }
+                File.AppendAllLines(Path.Combine(logs, "supervisor.log"),
+                                    [$"{DateTime.Now:yyyy-MM-dd HH:mm:ss} the Wi-Fi card could not be taken: {why}"]);
+                Say(new() { ["step"] = "done", ["ended"] = "card", ["wifi"] = wifi, ["why"] = why });
+                return 4;
+            }
         }
 
         using var job = Native.KillOnCloseJob();
@@ -81,6 +114,7 @@ public static class RadioSupervisor
                 Native.AssignProcessToJobObject(job, process.Handle);
                 running.Add((daemon, process, log));
             }
+            if (card is not null) Say(new() { ["step"] = "running" });
             WaitHandle[] any = [stop, Waitable(owner), .. running.Select(one => Waitable(one.Process))];
             ended = WaitHandle.WaitAny(any) switch
             {
@@ -104,16 +138,31 @@ public static class RadioSupervisor
             notes.Add($"{daemon.Name}: still running {InterruptWaitMs} ms later, killed");
             process.Kill();
         }
-        var own = new FileInfo(Path.Combine(logs, "supervisor.log"));
-        if (own.Exists && own.Length > OwnLogLimitBytes) own.Delete();
-        File.AppendAllLines(own.FullName, notes);
         foreach (var (_, process, log) in running)
         {
             process.WaitForExit();
             lock (log) log.Dispose();
         }
-        File.WriteAllText(status, JsonSerializer.Serialize(new Dictionary<string, string> { ["ended"] = ended }));
-        return ended is "stopped" or "owner" ? 0 : 3;
+        // Nothing holds the card any more: only now can Windows have it back without a restart.
+        if (card is not null)
+        {
+            Say(new() { ["step"] = "giving" });
+            try
+            {
+                card.GiveBack();
+                notes.Add("the Wi-Fi card: given back");
+            }
+            catch (CardException error)
+            {
+                (wifi, why) = ("off", error.Message);
+                notes.Add($"the Wi-Fi card: could not be given back: {why}");
+            }
+        }
+        var own = new FileInfo(Path.Combine(logs, "supervisor.log"));
+        if (own.Exists && own.Length > OwnLogLimitBytes) own.Delete();
+        File.AppendAllLines(own.FullName, notes);
+        Say(new() { ["step"] = "done", ["ended"] = ended, ["wifi"] = wifi, ["why"] = why });
+        return wifi == "off" ? 5 : ended is "stopped" or "owner" ? 0 : 3;
     }
 
     private static (Process, StreamWriter) Launch(Daemon daemon, string logs)

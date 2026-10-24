@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
@@ -484,15 +485,17 @@ public static class Checks
         var ping = Path.Combine(Environment.SystemDirectory, "ping.exe");
         Daemon Forever(string name) => new(name, ping, ["-t", "127.0.0.1"]);
 
-        (int Code, double Seconds, string Ended) Supervised(int owner, Daemon radio, Daemon awdl, Action<EventWaitHandle> during)
+        (int Code, double Seconds, string Ended) Supervised(int owner, Daemon radio, Daemon awdl, Action<EventWaitHandle> during,
+                                                            ICard? card = null, string? where = null)
         {
+            var folder = where ?? logs;
             var name = $"winawdl-check-{Environment.ProcessId}-{Guid.NewGuid():N}";
             using var stop = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\" + name);
             var clock = Stopwatch.StartNew();
-            var run = Task.Run(() => RadioSupervisor.Supervise(owner, name, radio, awdl, logs));
+            var run = Task.Run(() => RadioSupervisor.Supervise(owner, name, radio, awdl, folder, card, @"C:\stand-in\winawdl_regproxy.inf"));
             during(stop);
             var code = run.Wait(TimeSpan.FromSeconds(30)) ? run.Result : -1;
-            var status = Path.Combine(logs, RadioSupervisor.StatusFile);
+            var status = Path.Combine(folder, RadioSupervisor.StatusFile);
             return (code, clock.Elapsed.TotalSeconds, File.Exists(status) ? File.ReadAllText(status) : "");
         }
 
@@ -537,6 +540,85 @@ public static class Checks
         var missing = Supervised(Environment.ProcessId, new Daemon("radio", Path.Combine(logs, "no-such.exe"), []), Forever("awdld"), _ => { });
         Expect(missing.Code == 3 && missing.Ended.Contains("launch"), $"a daemon that cannot be started -> exit {missing.Code}, nothing left running");
         Expect(Process.GetProcessesByName("PING").Length == 0, "and again no daemon is left running");
+
+        // The Wi-Fi card: taken before the daemons start, given back once both have ended.
+        static string Field(string json, string name) =>
+            json.Length > 0 && JsonDocument.Parse(json).RootElement.TryGetProperty(name, out var value) ? value.GetString() ?? "" : "";
+        const string inf = @"C:\stand-in\winawdl_regproxy.inf";
+        var card = new ScriptedCard();
+        var stillRunning = -1;
+        card.OnGiveBack = () => stillRunning = Process.GetProcessesByName("PING").Length;
+        var handed = Supervised(Environment.ProcessId, Forever("radio"), Forever("awdld"), stop =>
+        {
+            Thread.Sleep(1500);
+            stop.Set();
+        }, card);
+        Expect(handed.Code == 0 && card.Calls.SequenceEqual([$"take {inf}", "give back"]) && Field(handed.Ended, "step") == "done"
+               && Field(handed.Ended, "wifi") == "back" && card.Now == CardHolder.Wifi,
+               $"asked to stop -> the card is taken first and given back last: {string.Join(", ", card.Calls)}, wifi {Field(handed.Ended, "wifi")}");
+        Expect(stillRunning == 0, $"the card is given back only after both daemons have ended ({stillRunning} still running then)");
+
+        // A daemon that does not take Ctrl+C is killed, and only then is the card given back.
+        var stubborn = Path.Combine(logs, "stubborn.pid");
+        File.Delete(stubborn);
+        var deaf = new Daemon("radio", Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
+        [
+            "-NoProfile", "-Command",
+            $"[Console]::TreatControlCAsInput = $true; Set-Content '{stubborn}' $PID; Start-Sleep 60",
+        ]);
+        card = new ScriptedCard();
+        var deafAlive = true;
+        card.OnGiveBack = () =>
+        {
+            try { deafAlive = !Process.GetProcessById(int.Parse(File.ReadAllText(stubborn).Trim())).HasExited; }
+            catch (Exception error) when (error is ArgumentException or IOException or FormatException) { deafAlive = false; }
+        };
+        var killed = Supervised(Environment.ProcessId, deaf, Forever("awdld"), stop =>
+        {
+            var waited = Stopwatch.StartNew();
+            while (waited.Elapsed.TotalSeconds < 25 && !File.Exists(stubborn)) Thread.Sleep(200);
+            stop.Set();
+        }, card);
+        Expect(killed.Code == 0 && card.Calls.LastOrDefault() == "give back" && !deafAlive,
+               $"a daemon deaf to Ctrl+C is killed first, then the card is given back (it was {(deafAlive ? "still running" : "gone")})");
+
+        // The card cannot be taken: nothing is started, and Wi-Fi was never off.
+        var untaken = Path.Combine(logs, "untaken");
+        if (Directory.Exists(untaken)) Directory.Delete(untaken, recursive: true);
+        Directory.CreateDirectory(untaken);
+        card = new ScriptedCard { TakeFails = "The Wi-Fi card was not found." };
+        var refused = Supervised(Environment.ProcessId, Forever("radio"), Forever("awdld"), _ => { }, card, untaken);
+        Expect(refused.Code == 4 && Field(refused.Ended, "ended") == "card" && Field(refused.Ended, "why") == "The Wi-Fi card was not found."
+               && card.Calls.SequenceEqual([$"take {inf}"]) && card.Now == CardHolder.Wifi
+               && !File.Exists(Path.Combine(untaken, "radio.log")),
+               $"the card cannot be taken -> exit {refused.Code}, no daemon started, Wi-Fi untouched: \"{Field(refused.Ended, "why")}\"");
+
+        // The card cannot be given back.
+        card = new ScriptedCard { GiveBackFails = "Windows wants a restart to finish giving Wi-Fi back." };
+        var stuck = Supervised(Environment.ProcessId, Forever("radio"), Forever("awdld"), stop =>
+        {
+            Thread.Sleep(1500);
+            stop.Set();
+        }, card);
+        Expect(stuck.Code == 5 && Field(stuck.Ended, "wifi") == "off"
+               && Field(stuck.Ended, "why") == "Windows wants a restart to finish giving Wi-Fi back.",
+               $"the card cannot be given back -> exit {stuck.Code}, wifi {Field(stuck.Ended, "wifi")}: \"{Field(stuck.Ended, "why")}\"");
+
+        // The app is gone: Wi-Fi comes back all the same.
+        using var gone = Process.Start(new ProcessStartInfo(ping, "-n 3 127.0.0.1") { CreateNoWindow = true, UseShellExecute = false })!;
+        card = new ScriptedCard();
+        var left = Supervised(gone.Id, Forever("radio"), Forever("awdld"), _ => { }, card);
+        Expect(left.Code == 0 && Field(left.Ended, "ended") == "owner" && card.Calls.LastOrDefault() == "give back"
+               && Field(left.Ended, "wifi") == "back", "the app is gone -> the daemons stop and Wi-Fi is given back");
+
+        // Run from a clone of the repository: no card is touched.
+        var plain = Supervised(Environment.ProcessId, Forever("radio"), Forever("awdld"), stop =>
+        {
+            Thread.Sleep(1500);
+            stop.Set();
+        });
+        Expect(plain.Code == 0 && Field(plain.Ended, "wifi") == "untouched", "without a card to move, Wi-Fi is left untouched");
+        Expect(Process.GetProcessesByName("PING").Length == 0, "and no daemon is left running after the card checks");
 
         var noRepo = new EngineProcess(System.Windows.Threading.Dispatcher.CurrentDispatcher, null, []);
         string? why = null;
