@@ -62,7 +62,10 @@ public sealed class ScriptedRadio : IRadio
         Become(RadioPhase.Starting);
     }
 
-    public void Stop() => Become(RadioPhase.Off);
+    /// <summary>Off at once, or, like the real radio, Stopping until told what came of it.</summary>
+    public bool StopsAtOnce { get; set; } = true;
+
+    public void Stop() => Become(StopsAtOnce ? RadioPhase.Off : RadioPhase.Stopping);
 
     public void Linked(bool up)
     {

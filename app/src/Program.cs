@@ -61,12 +61,20 @@ public static class Program
                                      repo is not null && !Repo.IsSourceTree(repo) ? new WindowsCard() : null);
         var model = new TableModel(engine, radio, new Desk(app.Dispatcher), settings);
         var window = new MainWindow(model, theme, settings);
-        using var tray = new Tray(window, () =>
+        Tray? icon = null;
+        var leaving = new Leaving(radio, () =>
         {
             window.Quitting = true;
             window.Close();
             app.Shutdown();
+        }, (text, press) => icon?.Say(text, press), window.Surface);
+        using var tray = new Tray(window, () =>
+        {
+            // The window goes at once; the app may stay in the notification area until Wi-Fi is back.
+            window.Hide();
+            leaving.Quit();
         }, model);
+        icon = tray;
         window.Closed += (_, _) => app.Shutdown();
         window.WentToTray += () =>
         {

@@ -8,6 +8,7 @@ using System.Windows.Documents;
 using Winawdl.Engine;
 using Winawdl.Model;
 using Winawdl.Radio;
+using Winawdl.Shell;
 using Winawdl.Theme;
 using Winawdl.Views;
 
@@ -256,6 +257,7 @@ public static class Checks
         Expect(model.Received.First(file => file.Name == "note.txt") is { HasVideo: false, Hint: "note.txt" }, "any other file has no video to play");
 
         Handover(app);
+        Quitting();
         Always(app);
         Requests(app);
     }
@@ -301,6 +303,42 @@ public static class Checks
 
         var clone = Stage.NewWorld(app.Dispatcher);
         Expect(clone.Model.PanelBody == plainOff, "run from a clone -> the off panel says nothing about Wi-Fi");
+    }
+
+    /// <summary>Quit from the notification area while the radio has the Wi-Fi card.</summary>
+    private static void Quitting()
+    {
+        (Leaving Leaving, ScriptedRadio Radio, List<string> Done) Quit(RadioPhase phase, bool swaps = true)
+        {
+            var radio = new ScriptedRadio { SwapsCard = swaps, StopsAtOnce = false };
+            radio.Become(phase);
+            var done = new List<string>();
+            var leaving = new Leaving(radio, () => done.Add("shut down"), (text, _) => done.Add($"said: {text}"),
+                                      () => done.Add("shown"));
+            leaving.Quit();
+            return (leaving, radio, done);
+        }
+
+        var (_, radio, done) = Quit(RadioPhase.Running);
+        var stillThere = done.Count == 0 && radio.Phase == RadioPhase.Stopping;
+        radio.Become(RadioPhase.GivingBack);
+        stillThere &= done.Count == 0;
+        radio.Become(RadioPhase.Off);
+        Expect(stillThere && done is ["shut down"],
+               $"Quit with the radio on -> it stops, the app stays until Wi-Fi is back, then goes: {string.Join(", ", done)}");
+
+        var (leaving, stuck, said) = Quit(RadioPhase.Running);
+        stuck.Become(RadioPhase.WifiLeftOff, "x");
+        var waits = said is ["said: Wi-Fi is still off. Press here to give it back."];
+        leaving.Quit();
+        Expect(waits && said.Last() == "shut down",
+               $"Wi-Fi cannot be given back -> it says so from the icon and stays, until Quit again: {string.Join(", ", said)}");
+
+        var (_, _, off) = Quit(RadioPhase.Off);
+        var (_, _, left) = Quit(RadioPhase.WifiLeftOff);
+        var (_, _, clone) = Quit(RadioPhase.Running, swaps: false);
+        Expect(off is ["shut down"] && left is ["shut down"] && clone is ["shut down"],
+               "radio off, Wi-Fi already known to be off, or a clone -> Quit goes at once");
     }
 
     /// <summary>A device whose requests are accepted without asking.</summary>
