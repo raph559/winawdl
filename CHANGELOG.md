@@ -3,6 +3,20 @@
 What each tagged state of the project holds. The measurements behind the
 numbers are in [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
+## 0.4.0, not tagged yet
+
+- **The Radio switch takes the Wi-Fi card and gives it back.** Turning the
+  radio on takes the card from Windows' Wi-Fi; turning it off gives it back,
+  once the radio has let go of it, with no restart. The window says which
+  way the card is going, and says so when Wi-Fi could not be given back, with
+  a press that tries again.
+- **Quit waits for Wi-Fi.** Quit with the radio on, and winawdl stays in the
+  notification area until Wi-Fi is back, or says from there that it is not.
+- **Wi-Fi comes back at startup.** A task that runs when Windows starts gives
+  the card back if the PC stopped with the radio on.
+- **Installing leaves Wi-Fi alone.** It no longer gives the card to
+  winawdl's driver; an upgrade over 0.3.0 gives Wi-Fi back.
+
 ## 0.3.0, 2026-10-13
 
 - **A request on screen.** While the app's window is not the one in front, a

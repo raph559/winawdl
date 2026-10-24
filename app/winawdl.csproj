@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>winawdl</AssemblyName>
     <RootNamespace>Winawdl</RootNamespace>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <!-- What is built says where its sources are from the repository down, not from the disk it was built on. -->
     <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..'))=.</PathMap>
     <Product>winawdl</Product>
