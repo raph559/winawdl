@@ -36,6 +36,7 @@ public static class Checks
             Program.Dress(app).Apply(Palette.Light(Rgb.Hex("#0078D4")));
             Motion.Reduced = true;
             States(app);
+            Card();
             Supervisor(Path.Combine(folder, "supervised"));
         }
         catch (Exception error)
@@ -446,6 +447,35 @@ public static class Checks
         {
             return "";
         }
+    }
+
+    /// <summary>Which driver packages in the store are the installed copy's own.</summary>
+    private static void Card()
+    {
+        const string store = """
+            <PnpUtil><Driver DriverName="oem66.inf"><OriginalName>winawdl_regproxy.inf</OriginalName>
+            <SignerName>winawdl driver (signed on this PC)</SignerName></Driver>
+            <Driver DriverName="oem70.inf"><OriginalName>winawdl_regproxy.inf</OriginalName>
+            <SignerName>winawdl driver signing (local test)</SignerName></Driver>
+            <Driver DriverName="oem92.inf"><OriginalName>netrtwlane6e.inf</OriginalName>
+            <SignerName>Microsoft Windows Hardware Compatibility Publisher</SignerName></Driver></PnpUtil>
+            """;
+        Expect(WifiCard.OwnPackages(store) is ["oem66.inf"],
+               "only the installed copy's own package counts as winawdl's, not the development one");
+        Expect(WifiCard.OwnPackages("<PnpUtil />").Count == 0, "an empty driver store holds none of winawdl's");
+        Expect(WifiCard.PackageInf(@"C:\Program Files\winawdl") == @"C:\Program Files\winawdl\driver\winawdl_regproxy.inf",
+               "the installed copy's package is in its driver folder");
+        string Card(string driver, string status) =>
+            $"<PnpUtil><Device InstanceId=\"x\"><Status>{status}</Status><DriverName>{driver}</DriverName></Device></PnpUtil>";
+        Expect(WifiCard.HolderFrom(Card("oem66.inf", "Started"), store) == CardHolder.Winawdl
+               && WifiCard.HolderFrom(Card("oem70.inf", "Started"), store) == CardHolder.Wifi
+               && WifiCard.HolderFrom(Card("oem92.inf", "Started"), store) == CardHolder.Wifi
+               && WifiCard.HolderFrom("<PnpUtil />", store) == CardHolder.Missing,
+               "the card is winawdl's only on the installed copy's package; no device is a missing card");
+        Expect(WifiCard.StartedWithWifi(Card("oem92.inf", "Started"), store)
+               && !WifiCard.StartedWithWifi(Card("oem92.inf", "Problem"), store)
+               && !WifiCard.StartedWithWifi(Card("oem66.inf", "Started"), store),
+               "Wi-Fi is back only once its own driver has the card and Windows has started it");
     }
 
     private static void Supervisor(string logs)

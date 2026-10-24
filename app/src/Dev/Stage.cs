@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Winawdl.Model;
+using Winawdl.Radio;
 using Winawdl.Shell;
 using Winawdl.Theme;
 using Winawdl.Views;
@@ -64,6 +65,34 @@ public sealed class ScriptedRadio : IRadio
     {
         (Phase, LastLine) = (phase, lastLine);
         Changed?.Invoke();
+    }
+}
+
+/// <summary>The Wi-Fi card, moved on paper, recording each call.</summary>
+public sealed class ScriptedCard : ICard
+{
+    public CardHolder Now { get; set; } = CardHolder.Wifi;
+    public string? TakeFails { get; set; }
+    public string? GiveBackFails { get; set; }
+    public List<string> Calls { get; } = [];
+    /// <summary>Runs as the card is given back, to see what still runs at that moment.</summary>
+    public Action? OnGiveBack { get; set; }
+
+    public CardHolder Holder() => Now;
+
+    public void Take(string inf)
+    {
+        Calls.Add($"take {inf}");
+        if (TakeFails is not null) throw new CardException(TakeFails);
+        Now = CardHolder.Winawdl;
+    }
+
+    public void GiveBack()
+    {
+        Calls.Add("give back");
+        OnGiveBack?.Invoke();
+        if (GiveBackFails is not null) throw new CardException(GiveBackFails);
+        Now = CardHolder.Wifi;
     }
 }
 
