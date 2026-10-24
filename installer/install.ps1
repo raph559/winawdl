@@ -164,7 +164,8 @@ if ((Test-Administrator) -and -not ((& $whoami /priv | Out-String) -match 'SeLoc
 '  make a certificate on this PC, sign the driver with it, add the certificate to this'
 '    PC''s trusted roots and trusted publishers, then delete its private key for good'
 "  let AirDrop through Windows Firewall, from link-local addresses only (TCP $ReceiverPort, UDP 5353)"
-'  add a task that gives Wi-Fi back when Windows starts, if winawdl still has the card then'
+'  add a task that gives Wi-Fi back when Windows starts or someone signs in, if winawdl'
+'    still has the card then'
 '  add winawdl to the Start Menu and to the list of installed apps'
 ''
 'Wi-Fi stays as it is. The Radio switch in winawdl takes the Wi-Fi card while the radio'
@@ -239,7 +240,8 @@ Step 'two inbound rules, for link-local addresses only' {
 Step 'a task that gives Wi-Fi back when Windows starts, if winawdl still has the card then' {
   # A restart or a crash with the radio on leaves the card with winawdl's driver.
   $action = New-ScheduledTaskAction -Execute (Join-Path $Target 'winawdl.exe') -Argument $GiveBackFlag -WorkingDirectory $Target
-  $when = New-ScheduledTaskTrigger -AtStartup
+  # Fast Startup powers on without a full start, which the startup trigger misses: signing in catches it.
+  $when = (New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -AtLogOn)
   $who = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
   $how = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
   Register-ScheduledTask -TaskName $StartupTask -TaskPath '\' -Action $action -Trigger $when -Principal $who `

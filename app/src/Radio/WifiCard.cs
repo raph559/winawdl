@@ -31,27 +31,62 @@ public static class WifiCard
     /// <summary>The entry point the startup task, the installers and the app's "Give Wi-Fi back" run.</summary>
     public const string GiveBackFlag = "--give-wifi-back";
 
+    public const string Busy = "Another winawdl is still moving the Wi-Fi card. Try again in a moment.";
+    /// <summary>Long enough for another copy to stop its radio and give the card back.</summary>
+    public static readonly TimeSpan WaitForOthers = TimeSpan.FromSeconds(60);
+
+    /// <summary>Held by whichever copy of winawdl is moving the card, across sessions and
+    /// accounts: the app's radio copy, the startup task, an installer.</summary>
+    public static IDisposable Lock(TimeSpan wait)
+    {
+        var mutex = new Mutex(false, @"Global\winawdl-wifi-card");
+        try
+        {
+            if (!mutex.WaitOne(wait))
+            {
+                mutex.Dispose();
+                throw new CardException(Busy);
+            }
+        }
+        catch (AbandonedMutexException)
+        {
+            // A copy that held it was killed: the card is this one's to look at now.
+        }
+        return new Held(mutex);
+    }
+
+    private sealed class Held(Mutex mutex) : IDisposable
+    {
+        public void Dispose()
+        {
+            mutex.ReleaseMutex();
+            mutex.Dispose();
+        }
+    }
+
     /// <summary>Gives the card back if winawdl's driver has it, and says what was done in wifi.log.
     /// Returns 0 when Wi-Fi has the card (or there is none), 1 when it could not be given back.</summary>
-    public static int GiveBackNow(ICard card, string logs)
+    public static int GiveBackNow(ICard card, string logs, TimeSpan? wait = null)
     {
         Directory.CreateDirectory(logs);
         void Say(string line) =>
             File.AppendAllLines(Path.Combine(logs, "wifi.log"), [$"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {line}"]);
-        var holder = card.Holder();
-        if (holder != CardHolder.Winawdl)
-        {
-            Say($"nothing to give back ({(holder == CardHolder.Wifi ? "Wi-Fi has the card" : "no card")})");
-            return 0;
-        }
         try
         {
+            using var held = Lock(wait ?? WaitForOthers);
+            var holder = card.Holder();
+            if (holder != CardHolder.Winawdl)
+            {
+                Say($"nothing to give back ({(holder == CardHolder.Wifi ? "Wi-Fi has the card" : "no card")})");
+                return 0;
+            }
             card.GiveBack();
             Say("gave Wi-Fi back");
             return 0;
         }
-        catch (CardException error)
+        catch (Exception error)
         {
+            // Whatever Windows threw, the line says it: the installers and the app show it.
             Say($"could not give Wi-Fi back: {error.Message}");
             return 1;
         }

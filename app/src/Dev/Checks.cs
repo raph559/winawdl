@@ -334,6 +334,10 @@ public static class Checks
         Expect(waits && said.Last() == "shut down",
                $"Wi-Fi cannot be given back -> it says so from the icon and stays, until Quit again: {string.Join(", ", said)}");
 
+        var (_, taking, failed) = Quit(RadioPhase.TakingCard);
+        taking.Become(RadioPhase.Failed, "The Wi-Fi card was not found.");
+        Expect(failed is ["shut down"], $"Quit while the card is being taken, and taking it fails -> it goes: {string.Join(", ", failed)}");
+
         var (_, _, off) = Quit(RadioPhase.Off);
         var (_, _, left) = Quit(RadioPhase.WifiLeftOff);
         var (_, _, clone) = Quit(RadioPhase.Running, swaps: false);
@@ -570,6 +574,16 @@ public static class Checks
         var failing = new ScriptedCard { Now = CardHolder.Winawdl, GiveBackFails = "x" };
         Expect(WifiCard.GiveBackNow(failing, logs) == 1 && Last().EndsWith("could not give Wi-Fi back: x"),
                $"it cannot be given back -> exit 1, and the log says why: \"{Last()}\"");
+        var unreadable = new ScriptedCard { HolderBreaks = true };
+        Expect(WifiCard.GiveBackNow(unreadable, logs) == 1 && Last().Contains("could not give Wi-Fi back") && Last().Contains("not XML"),
+               $"Windows cannot even say who has the card -> exit 1, and the log says why: \"{Last()}\"");
+        using (var other = new Hold())
+        {
+            var waiting = new ScriptedCard { Now = CardHolder.Winawdl };
+            Expect(WifiCard.GiveBackNow(waiting, logs, TimeSpan.FromSeconds(1)) == 1 && waiting.Calls.Count == 0
+                   && Last().EndsWith("Another winawdl is still moving the Wi-Fi card. Try again in a moment."),
+                   $"another copy is moving the card -> it is left alone: \"{Last()}\"");
+        }
         Directory.Delete(logs, recursive: true);
     }
 
@@ -598,6 +612,44 @@ public static class Checks
         var clone = new RadioControl(app.Dispatcher, null);
         Expect(fine.Phase == RadioPhase.Off && !clone.SwapsCard && clone.Phase == RadioPhase.Off,
                "Wi-Fi has the card, or the app runs from a clone -> nothing to say");
+        var blind = new RadioControl(app.Dispatcher, null, new ScriptedCard { HolderBreaks = true });
+        Expect(blind.Phase == RadioPhase.Off, "Windows cannot say who has the card when the app starts -> it still starts");
+
+        // The radio's copy ended without saying it gave the card back (killed, crashed): the card itself is asked.
+        var held = new RadioControl(app.Dispatcher, null, new ScriptedCard { Now = CardHolder.Wifi });
+        var heldCard = new ScriptedCard { Now = CardHolder.Winawdl };
+        var killed = new RadioControl(app.Dispatcher, null, new ScriptedCard()) { };
+        Expect(new RadioControl(app.Dispatcher, null, heldCard).AfterExit("""{"step":"giving"}""", true).Phase == RadioPhase.WifiLeftOff
+               && new RadioControl(app.Dispatcher, null, heldCard).AfterExit("", false).Phase == RadioPhase.WifiLeftOff,
+               "the radio's copy ends before saying it is done, and winawdl's driver still has the card -> Wi-Fi is still off");
+        Expect(held.AfterExit("""{"step":"giving"}""", true).Phase == RadioPhase.Off
+               && killed.AfterExit("""{"step":"done","ended":"stopped","wifi":"back","why":""}""", true).Phase == RadioPhase.Off,
+               "it ends with Wi-Fi holding the card, or says it is done -> as before");
+    }
+
+    /// <summary>Another copy of winawdl in the middle of moving the card.</summary>
+    private sealed class Hold : IDisposable
+    {
+        private readonly ManualResetEventSlim _held = new(), _release = new();
+        private readonly Thread _thread;
+
+        public Hold()
+        {
+            _thread = new Thread(() =>
+            {
+                using var held = WifiCard.Lock(TimeSpan.FromSeconds(5));
+                _held.Set();
+                _release.Wait();
+            });
+            _thread.Start();
+            _held.Wait();
+        }
+
+        public void Dispose()
+        {
+            _release.Set();
+            _thread.Join();
+        }
     }
 
     private static void Supervisor(string logs)
@@ -607,13 +659,14 @@ public static class Checks
         Daemon Forever(string name) => new(name, ping, ["-t", "127.0.0.1"]);
 
         (int Code, double Seconds, string Ended) Supervised(int owner, Daemon radio, Daemon awdl, Action<EventWaitHandle> during,
-                                                            ICard? card = null, string? where = null)
+                                                            ICard? card = null, string? where = null, TimeSpan? cardWait = null)
         {
             var folder = where ?? logs;
             var name = $"winawdl-check-{Environment.ProcessId}-{Guid.NewGuid():N}";
             using var stop = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\" + name);
             var clock = Stopwatch.StartNew();
-            var run = Task.Run(() => RadioSupervisor.Supervise(owner, name, radio, awdl, folder, card, @"C:\stand-in\winawdl_regproxy.inf"));
+            var run = Task.Run(() => RadioSupervisor.Supervise(owner, name, radio, awdl, folder, card, @"C:\stand-in\winawdl_regproxy.inf",
+                                                               cardWait));
             during(stop);
             var code = run.Wait(TimeSpan.FromSeconds(30)) ? run.Result : -1;
             var status = Path.Combine(folder, RadioSupervisor.StatusFile);
@@ -740,6 +793,41 @@ public static class Checks
         });
         Expect(plain.Code == 0 && Field(plain.Ended, "wifi") == "untouched", "without a card to move, Wi-Fi is left untouched");
         Expect(Process.GetProcessesByName("PING").Length == 0, "and no daemon is left running after the card checks");
+
+        // The elevated copy that the app starts moves the card in an installed copy only.
+        var installedRoot = Directory.CreateDirectory(Path.Combine(logs, "installed-copy")).FullName;
+        var (installedCard, installedInf) = RadioSupervisor.CardFor(installedRoot);
+        var (cloneCard, cloneInf) = RadioSupervisor.CardFor(Repo.Find()!);
+        Expect(installedCard is WindowsCard && installedInf == WifiCard.PackageInf(installedRoot)
+               && cloneCard is null && cloneInf == "",
+               "the radio's copy moves the card from an installed copy, and leaves it from a clone");
+
+        // Windows fails in a way other than a CardException: the card still ends with Wi-Fi, or says it did not.
+        card = new ScriptedCard { Breaks = new IOException("pnputil could not be started") };
+        var broken = Supervised(Environment.ProcessId, Forever("radio"), Forever("awdld"), _ => { }, card, untaken);
+        Expect(broken.Code == 4 && Field(broken.Ended, "ended") == "card" && Field(broken.Ended, "why").Contains("pnputil could not be started"),
+               $"taking the card breaks -> exit {broken.Code}, nothing started: \"{Field(broken.Ended, "why")}\"");
+        var breaksLater = new ScriptedCard();
+        var cut = Supervised(Environment.ProcessId, Forever("radio"), Forever("awdld"), stop =>
+        {
+            Thread.Sleep(1500);
+            breaksLater.Breaks = new System.Xml.XmlException("not XML");
+            stop.Set();
+        }, breaksLater);
+        Expect(cut.Code == 5 && Field(cut.Ended, "step") == "done" && Field(cut.Ended, "wifi") == "off",
+               $"giving the card back breaks -> exit {cut.Code}, wifi {Field(cut.Ended, "wifi")}: \"{Field(cut.Ended, "why")}\"");
+
+        // Two copies never move the card at once: one that finds the card being moved waits, then gives up.
+        using (var other = new Hold())
+        {
+            card = new ScriptedCard();
+            var busy = Supervised(Environment.ProcessId, Forever("radio"), Forever("awdld"), _ => { }, card, untaken,
+                                  TimeSpan.FromSeconds(1));
+            Expect(busy.Code == 4 && card.Calls.Count == 0
+                   && Field(busy.Ended, "why") == "Another winawdl is still moving the Wi-Fi card. Try again in a moment.",
+                   $"another copy is moving the card -> this one does not touch it: \"{Field(busy.Ended, "why")}\"");
+        }
+        Expect(Process.GetProcessesByName("PING").Length == 0, "and no daemon is left running after the broken cards");
 
         var noRepo = new EngineProcess(System.Windows.Threading.Dispatcher.CurrentDispatcher, null, []);
         string? why = null;

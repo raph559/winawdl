@@ -18,7 +18,10 @@ public sealed class RadioControl : IRadio
     private const int MostShownChars = 280;
     private const string LeftOff = "Wi-Fi was left off when the radio last stopped.";
 
+    private const string EndedHolding = "The radio stopped before it could give Wi-Fi back.";
+
     private readonly string? _repo;
+    private readonly ICard? _card;
     private readonly DispatcherTimer _watch;
     private Process? _supervisor;
     private Process? _giver;
@@ -30,11 +33,32 @@ public sealed class RadioControl : IRadio
     public RadioControl(Dispatcher dispatcher, string? repo, ICard? card = null)
     {
         _repo = repo;
+        _card = card;
         SwapsCard = card is not null;
         _watch = new DispatcherTimer(TimeSpan.FromMilliseconds(400), DispatcherPriority.Background,
                                      (_, _) => Look(), dispatcher) { IsEnabled = false };
-        if (card?.Holder() == CardHolder.Winawdl) (Phase, LastLine) = (RadioPhase.WifiLeftOff, LeftOff);
+        if (Holds()) (Phase, LastLine) = (RadioPhase.WifiLeftOff, LeftOff);
     }
+
+    /// <summary>winawdl's driver has the card. If Windows cannot say, the app still starts.</summary>
+    private bool Holds()
+    {
+        try
+        {
+            return _card?.Holder() == CardHolder.Winawdl;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The phase once the radio's copy has ended. One that ended without saying it
+    /// was done (killed, crashed) may have left the card with winawdl: the card is asked.</summary>
+    internal (RadioPhase Phase, string Line) AfterExit(string statusJson, bool wasStopping) =>
+        _card is not null && Field(statusJson, "step") != "done" && Holds()
+            ? (RadioPhase.WifiLeftOff, EndedHolding)
+            : Ended(statusJson, wasStopping);
 
     public RadioPhase Phase { get; private set; }
     public string LastLine { get; private set; } = "";
@@ -186,7 +210,7 @@ public sealed class RadioControl : IRadio
         _stop?.Dispose();
         _stop = null;
         var status = Status();
-        var (phase, line) = Ended(status, Phase is RadioPhase.Stopping or RadioPhase.GivingBack);
+        var (phase, line) = AfterExit(status, Phase is RadioPhase.Stopping or RadioPhase.GivingBack);
         if (phase == RadioPhase.Failed && line.Length == 0)
             line = Tail(Field(status, "ended") == "awdld" ? "awdld.log" : "radio.log");
         Become(phase, line);

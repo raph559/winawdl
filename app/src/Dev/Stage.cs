@@ -88,12 +88,16 @@ public sealed class ScriptedCard : ICard
     public List<string> Calls { get; } = [];
     /// <summary>Runs as the card is given back, to see what still runs at that moment.</summary>
     public Action? OnGiveBack { get; set; }
+    /// <summary>What Windows might throw instead of a CardException: pnputil missing, output that is not XML.</summary>
+    public Exception? Breaks { get; set; }
+    public bool HolderBreaks { get; set; }
 
-    public CardHolder Holder() => Now;
+    public CardHolder Holder() => HolderBreaks ? throw new System.Xml.XmlException("not XML") : Now;
 
     public void Take(string inf)
     {
         Calls.Add($"take {inf}");
+        if (Breaks is not null) throw Breaks;
         if (TakeFails is not null) throw new CardException(TakeFails);
         Now = CardHolder.Winawdl;
     }
@@ -102,6 +106,7 @@ public sealed class ScriptedCard : ICard
     {
         Calls.Add("give back");
         OnGiveBack?.Invoke();
+        if (Breaks is not null) throw Breaks;
         if (GiveBackFails is not null) throw new CardException(GiveBackFails);
         Now = CardHolder.Wifi;
     }

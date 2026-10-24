@@ -43,19 +43,24 @@ public static class RadioSupervisor
     {
         if (arguments.Length != 2 || !int.TryParse(arguments[0], out var owner) || Repo.Find() is not { } root)
             return 2;
+        var (card, inf) = CardFor(root);
         // The same two commands scripts\awdl-run.ps1 runs with its defaults.
         return Supervise(owner, arguments[1],
                          new Daemon("radio", RadioProgram(root), [Channel]),
                          new Daemon("awdld", AwdlProgram(root), ["-c", Channel]),
-                         LogFolder);
+                         LogFolder, card, inf);
     }
+
+    /// <summary>An installed copy moves the Wi-Fi card; a clone uses it as its scripts left it.</summary>
+    public static (ICard? Card, string Inf) CardFor(string root) =>
+        Repo.IsSourceTree(root) ? (null, "") : (new WindowsCard(), WifiCard.PackageInf(root));
 
     /// <summary>Returns 0 after a stop that was asked for, 3 when a daemon ended by itself, 4 when
     /// the Wi-Fi card could not be taken, 5 when it could not be given back. With a card, it is
     /// taken before the daemons start and given back once both have ended; radio.status says
     /// which step is under way.</summary>
     public static int Supervise(int ownerPid, string stopName, Daemon radio, Daemon awdl, string logs,
-                                ICard? card = null, string inf = "")
+                                ICard? card = null, string inf = "", TimeSpan? cardWait = null)
     {
         Directory.CreateDirectory(logs);
         var status = Path.Combine(logs, StatusFile);
@@ -74,25 +79,29 @@ public static class RadioSupervisor
         void Say(Dictionary<string, string> what) => File.WriteAllText(status, JsonSerializer.Serialize(what));
         var wifi = card is null ? "untouched" : "back";
         var why = "";
+        // Held from taking the card until it is back, so no other copy moves it meanwhile.
+        IDisposable? moving = null;
         if (card is not null)
         {
             Say(new() { ["step"] = "taking" });
             try
             {
+                moving = WifiCard.Lock(cardWait ?? WifiCard.WaitForOthers);
                 card.Take(inf);
             }
-            catch (CardException error)
+            catch (Exception error)
             {
                 why = error.Message;
                 // Half taken: it goes back before anything else is tried.
                 try
                 {
-                    if (card.Holder() == CardHolder.Winawdl) card.GiveBack();
+                    if (moving is not null && card.Holder() == CardHolder.Winawdl) card.GiveBack();
                 }
-                catch (CardException)
+                catch (Exception)
                 {
                     wifi = "off";
                 }
+                moving?.Dispose();
                 File.AppendAllLines(Path.Combine(logs, "supervisor.log"),
                                     [$"{DateTime.Now:yyyy-MM-dd HH:mm:ss} the Wi-Fi card could not be taken: {why}"]);
                 Say(new() { ["step"] = "done", ["ended"] = "card", ["wifi"] = wifi, ["why"] = why });
@@ -152,11 +161,12 @@ public static class RadioSupervisor
                 card.GiveBack();
                 notes.Add("the Wi-Fi card: given back");
             }
-            catch (CardException error)
+            catch (Exception error)
             {
                 (wifi, why) = ("off", error.Message);
                 notes.Add($"the Wi-Fi card: could not be given back: {why}");
             }
+            moving?.Dispose();
         }
         var own = new FileInfo(Path.Combine(logs, "supervisor.log"));
         if (own.Exists && own.Length > OwnLogLimitBytes) own.Delete();

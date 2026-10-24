@@ -28,7 +28,8 @@ public sealed class Leaving(IRadio radio, Action shutdown, Action<string, Action
 
     private void Look()
     {
-        if (radio.Phase == RadioPhase.Off) Go();
+        // Off, or the card never moved (taking it failed, or Windows said no): nothing to wait for.
+        if (radio.Phase is RadioPhase.Off or RadioPhase.Failed or RadioPhase.Refused or RadioPhase.NotBuilt) Go();
         else if (radio.Phase == RadioPhase.WifiLeftOff && !_told)
         {
             _told = true;
