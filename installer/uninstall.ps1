@@ -1,6 +1,6 @@
 # Takes winawdl off this PC: gives the Wi-Fi card back to its own driver,
 # removes the driver, the trust in the certificate it was signed with, the
-# firewall rules, the Start Menu entry and the files. What was received stays
+# firewall rules, the startup task, the Start Menu entry and the files. What was received stays
 # where it was stored. -RemoveData also deletes the app's settings and logs.
 # -DryRun says what would be done and changes nothing. -Yes asks no questions.
 # -Setup is how the setup program's own uninstaller runs this: it removes the
@@ -28,6 +28,9 @@ $FirewallGroup = 'winawdl AirDrop'
 $UninstallKey  = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\winawdl'
 $Shortcut      = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\winawdl.lnk'
 $Data          = (Join-Path $env:LOCALAPPDATA 'winawdl'), (Join-Path $env:ProgramData 'winawdl')
+$GiveBackFlag  = '--give-wifi-back'
+$LogFolder     = Join-Path $env:ProgramData 'winawdl\logs'
+$StartupTask   = 'winawdl Wi-Fi'
 $TempCopy      = 'winawdl-uninstall.ps1'
 
 function Step([string]$what, [scriptblock]$do) {
@@ -76,6 +79,21 @@ if ($running) {
     }
     Get-Process $Programs -ErrorAction SilentlyContinue | Stop-Process -Force
   }
+}
+
+'Wi-Fi'
+Step 'give the Wi-Fi card back, if winawdl''s driver has it' {
+  # Removing the driver below gives it back too; this way says why, if it cannot.
+  $app = Join-Path $Target 'winawdl.exe'
+  if (Test-Path $app) {
+    $giver = Start-Process $app -ArgumentList $GiveBackFlag -Wait -PassThru
+    if ($giver.ExitCode -ne 0) {
+      "  could not: $(Get-Content (Join-Path $LogFolder 'wifi.log') -Tail 1 -ErrorAction SilentlyContinue)"
+    }
+  }
+}
+Step 'remove the task that gives Wi-Fi back when Windows starts' {
+  Unregister-ScheduledTask -TaskName $StartupTask -Confirm:$false -ErrorAction SilentlyContinue
 }
 
 'Driver'

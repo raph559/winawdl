@@ -1,7 +1,8 @@
 # Installs winawdl from the folder this script is in: copies it to Program
-# Files, signs the driver with a certificate made on this PC, binds the driver
-# to the Wi-Fi card, lets AirDrop through the firewall and adds a Start Menu
-# entry. uninstall.ps1 undoes all of it.
+# Files, signs the driver with a certificate made on this PC, lets AirDrop
+# through the firewall, adds a startup task that gives Wi-Fi back and a Start
+# Menu entry. It leaves Wi-Fi alone: the app's Radio switch takes the card and
+# gives it back. uninstall.ps1 undoes all of it.
 # -DryRun says what would be done and changes nothing. -Yes asks no questions.
 # The setup program uses two more. -Missing only lists what the PC still
 # lacks, one "winget id, tab, name" a line. -Setup says the setup program has
@@ -20,7 +21,10 @@ if (-not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSyste
 $Source        = $PSScriptRoot
 $Target        = Join-Path $env:ProgramFiles 'winawdl'
 $HardwareId    = 'PCI\VEN_10EC&DEV_C852'
-$InfName       = 'winawdl_regproxy.inf'
+# What the app runs to give the Wi-Fi card back, and where it says how that went.
+$GiveBackFlag  = '--give-wifi-back'
+$LogFolder     = Join-Path $env:ProgramData 'winawdl\logs'
+$StartupTask   = 'winawdl Wi-Fi'
 # Not the subject scripts\package-driver.ps1 uses: a PC set up from source
 # keeps its own certificate, and uninstalling removes only this one.
 $CertSubject   = 'CN=winawdl driver (signed on this PC)'
@@ -54,11 +58,6 @@ function Get-CardDriver {
   "$($card.FriendlyName), driver package $inf"
 }
 
-# Published names (oemNN.inf) of every copy of the driver package in the driver store.
-function Get-PublishedPackages {
-  $store = [xml](pnputil /enum-drivers /format xml | Out-String)
-  $store.PnpUtil.Driver | Where-Object { $_.OriginalName -eq $InfName } | ForEach-Object { $_.DriverName }
-}
 
 function Get-PythonVersion {
   # The Store's stand-in for python.exe answers on its error stream only, and
@@ -161,11 +160,15 @@ if ((Test-Administrator) -and -not ((& $whoami /priv | Out-String) -match 'SeLoc
 
 'This will:'
 "  copy winawdl to $Target"
+'  give Wi-Fi back, if an earlier winawdl has the Wi-Fi card'
 '  make a certificate on this PC, sign the driver with it, add the certificate to this'
 '    PC''s trusted roots and trusted publishers, then delete its private key for good'
-'  give the Wi-Fi card to that driver: Wi-Fi is down from then until you uninstall'
 "  let AirDrop through Windows Firewall, from link-local addresses only (TCP $ReceiverPort, UDP 5353)"
+'  add a task that gives Wi-Fi back when Windows starts, if winawdl still has the card then'
 '  add winawdl to the Start Menu and to the list of installed apps'
+''
+'Wi-Fi stays as it is. The Radio switch in winawdl takes the Wi-Fi card while the radio'
+'is on, and gives it back when the radio is turned off or winawdl quits.'
 ''
 "The Wi-Fi card now: $(Get-CardDriver)"
 ''
@@ -181,6 +184,15 @@ if ($Source.TrimEnd('\') -eq $Target) {
   Step "copy to $Target" {
     if (Test-Path $Target) { Remove-Item $Target -Recurse -Force }
     Copy-Item $Source $Target -Recurse
+  }
+}
+
+'Earlier install'
+Step 'give Wi-Fi back, if winawdl''s driver has the Wi-Fi card' {
+  $giver = Start-Process (Join-Path $Target 'winawdl.exe') -ArgumentList $GiveBackFlag -Wait -PassThru
+  if ($giver.ExitCode -ne 0) {
+    $said = Get-Content (Join-Path $LogFolder 'wifi.log') -Tail 1 -ErrorAction SilentlyContinue
+    throw "Wi-Fi could not be given back: $said"
   }
 }
 
@@ -211,30 +223,6 @@ Step 'make a certificate, trust it on this PC, and sign the driver with it' {
     Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -DeleteKey
   }
 }
-Step 'add the driver package to Windows' {
-  pnputil /add-driver (Join-Path $driver $InfName) | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "pnputil could not add the package ($LASTEXITCODE)" }
-}
-Step 'give the Wi-Fi card to it' {
-  # The vendor's driver ranks higher, so the change has to be forced. This is
-  # the call devcon makes for "update".
-  Add-Type -Namespace Winawdl -Name NewDev -MemberDefinition @'
-[DllImport("newdev.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-public static extern bool UpdateDriverForPlugAndPlayDevicesW(
-    IntPtr window, string hardwareId, string infPath, uint flags, out bool rebootNeeded);
-'@
-  $InstallFlagForce = 1
-  $reboot = $false
-  $done = [Winawdl.NewDev]::UpdateDriverForPlugAndPlayDevicesW(
-    [IntPtr]::Zero, $HardwareId, (Join-Path $driver $InfName), $InstallFlagForce, [ref]$reboot)
-  if (-not $done) {
-    $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-    throw ('Windows would not give the card to the driver (error 0x{0:X8}). Run uninstall.cmd to undo the rest.' -f $code)
-  }
-  if ($reboot) { '  Windows wants a restart before the card works with it.' }
-  $bound = (Get-PnpDeviceProperty -InstanceId (Get-WifiCard).InstanceId -KeyName DEVPKEY_Device_DriverInfPath).Data
-  Get-PublishedPackages | Where-Object { $_ -ne $bound } | ForEach-Object { pnputil /delete-driver $_ | Out-Null }
-}
 
 'Firewall'
 Step 'two inbound rules, for link-local addresses only' {
@@ -245,6 +233,17 @@ Step 'two inbound rules, for link-local addresses only' {
   }
   New-NetFirewallRule @common -DisplayName 'winawdl AirDrop receiver' -Protocol TCP -LocalPort $ReceiverPort | Out-Null
   New-NetFirewallRule @common -DisplayName 'winawdl AirDrop discovery' -Protocol UDP -LocalPort 5353 | Out-Null
+}
+
+'Startup'
+Step 'a task that gives Wi-Fi back when Windows starts, if winawdl still has the card then' {
+  # A restart or a crash with the radio on leaves the card with winawdl's driver.
+  $action = New-ScheduledTaskAction -Execute (Join-Path $Target 'winawdl.exe') -Argument $GiveBackFlag -WorkingDirectory $Target
+  $when = New-ScheduledTaskTrigger -AtStartup
+  $who = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+  $how = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+  Register-ScheduledTask -TaskName $StartupTask -TaskPath '\' -Action $action -Trigger $when -Principal $who `
+    -Settings $how -Description 'Gives the Wi-Fi card back to Windows if winawdl''s radio had it when the PC stopped.' -Force | Out-Null
 }
 
 if ($Setup) {
@@ -287,5 +286,5 @@ Step 'a shortcut, and an entry in the list of installed apps' {
 ''
 if ($DryRun) { 'Dry run done: nothing was changed.'; exit 0 }
 "The Wi-Fi card now: $(Get-CardDriver)"
-'Installed. Start winawdl from the Start Menu and turn its Radio switch on.'
+'Installed. Start winawdl from the Start Menu and turn its Radio switch on: Wi-Fi is off while the radio is on.'
 "To take it off again: `"$(Join-Path $Target 'uninstall.cmd')`", or Installed apps in Settings."

@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: MIT
 ; The setup program, for Inno Setup 6: one exe that copies winawdl to Program
 ; Files, then runs install.ps1 -Setup for what can only be done on the PC
-; itself (signing the driver, giving the card to it, the firewall rules). Its
+; itself (signing the driver, the firewall rules, the startup task). Its
 ; uninstaller runs uninstall.ps1 -Setup before it removes the files.
 ; scripts\build-installer.ps1 compiles this from the folder it stages.
 #ifndef Version
@@ -199,18 +199,18 @@ var
 begin
   if CurStep <> ssPostInstall then
     exit;
-  WizardForm.StatusLabel.Caption := 'Signing the driver on this PC and giving the Wi-Fi card to it...';
+  WizardForm.StatusLabel.Caption := 'Signing the driver on this PC...';
   WizardForm.FilenameLabel.Caption := '';
   if not RunScript(ExpandConstant('{app}\install.ps1'), '-Yes -Setup', 'install.log', Code) then
     Code := -1;
   if Code <> 0 then
   begin
     Failed := True;
-    { Whatever was done is taken back, so that the card is not left with a driver that does not work. }
+    { Whatever was done is taken back, so that Wi-Fi keeps the card and nothing half set up is left. }
     RunScript(ExpandConstant('{app}\uninstall.ps1'), '-Yes -Setup', 'install-undone.log', Code);
     SuppressibleMsgBox('winawdl could not be set up on this PC:' + #13#10#13#10 +
                        LastLines('install.log', 8) + #13#10 +
-                       'The Wi-Fi card was given back to its own driver. The files are in place: ' +
+                       'Wi-Fi was left with the card. The files are in place: ' +
                        'start this setup again, or uninstall winawdl from Installed apps. ' +
                        'The whole log is in ' + LogFolder + '.', mbError, MB_OK, IDOK);
   end

@@ -4,7 +4,7 @@ winawdl is AirDrop on Windows, through the PC's own Wi-Fi card. It is research c
 
 - It works with one Wi-Fi card only, the Realtek RTL8852CE. Setup stops, having changed nothing, on a PC that has another.
 
-- Installing gives that card to winawdl's driver. Wi-Fi is down from then until you uninstall, so the PC needs another way onto the network.
+- Installing leaves Wi-Fi as it is. The app's Radio switch gives the card to winawdl's driver while the radio is on, so Wi-Fi is off then. Wi-Fi comes back when the radio is turned off, when winawdl quits, and when Windows starts.
 
 - The driver is signed on your PC, with a certificate setup makes there and adds to the PC's trusted roots and trusted publishers. Setup then deletes that certificate's private key, so nothing else can ever be signed with it.
 

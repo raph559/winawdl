@@ -12,8 +12,10 @@ Before you install
 
 - It works with one Wi-Fi card only, the Realtek RTL8852CE. The installer
   stops, having changed nothing, on a PC that has another.
-- Installing gives that card to winawdl's driver. Wi-Fi is down from then
-  until you uninstall, so the PC needs another way onto the network.
+- Installing leaves Wi-Fi as it is. The app's Radio switch gives the card to
+  winawdl's driver while the radio is on, so Wi-Fi is off then. Wi-Fi comes
+  back when the radio is turned off, when winawdl quits, and when Windows
+  starts.
 - The driver is signed on your PC, with a certificate the installer makes
   there and adds to the PC's trusted roots and trusted publishers. The
   installer then deletes that certificate's private key, so nothing else can
@@ -38,7 +40,8 @@ already. From the zip:
 2. Double-click install.cmd. Windows asks for administrator rights, then the
    installer lists what it will change and waits for your answer.
 3. Start winawdl from the Start Menu and turn its Radio switch on. Windows
-   asks for administrator rights again, for the radio.
+   asks for administrator rights again, for the radio. Wi-Fi is off while
+   the radio is on.
 
 The installer needs three things on the PC and offers to fetch what is
 missing with winget: the .NET Desktop Runtime 10, Python 3.10 or newer, and
