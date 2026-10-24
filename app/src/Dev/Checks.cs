@@ -38,6 +38,7 @@ public static class Checks
             Motion.Reduced = true;
             States(app);
             Card();
+            RadioWatch(app);
             Supervisor(Path.Combine(folder, "supervised"));
         }
         catch (Exception error)
@@ -494,6 +495,33 @@ public static class Checks
         Expect(WifiCard.GiveBackNow(failing, logs) == 1 && Last().EndsWith("could not give Wi-Fi back: x"),
                $"it cannot be given back -> exit 1, and the log says why: \"{Last()}\"");
         Directory.Delete(logs, recursive: true);
+    }
+
+    /// <summary>How the app reads the elevated copy's radio.status, and a card left with winawdl.</summary>
+    private static void RadioWatch(Application app)
+    {
+        Expect(RadioControl.During("""{"step":"taking"}""") == RadioPhase.TakingCard
+               && RadioControl.During("""{"step":"running"}""") == RadioPhase.Starting
+               && RadioControl.During("""{"step":"giving"}""") == RadioPhase.GivingBack
+               && RadioControl.During("") is null,
+               "while the radio's copy runs, its step says whether the card is being taken or given back");
+        Expect(RadioControl.Ended("""{"step":"done","ended":"stopped","wifi":"off","why":"x"}""", false) == (RadioPhase.WifiLeftOff, "x"),
+               "it ends with Wi-Fi left off -> the app says so, with why");
+        Expect(RadioControl.Ended("""{"step":"done","ended":"card","wifi":"back","why":"The Wi-Fi card was not found."}""", false)
+               == (RadioPhase.Failed, "The Wi-Fi card was not found."),
+               "the card could not be taken -> the radio did not start, and why");
+        Expect(RadioControl.Ended("""{"step":"done","ended":"stopped","wifi":"back","why":""}""", true) == (RadioPhase.Off, "")
+               && RadioControl.Ended("""{"step":"done","ended":"owner","wifi":"untouched","why":""}""", false) == (RadioPhase.Off, "")
+               && RadioControl.Ended("""{"step":"done","ended":"radio","wifi":"back","why":""}""", false) == (RadioPhase.Failed, ""),
+               "a stop that was asked for is off; a daemon that ended by itself is a failure, as before");
+        var left = new RadioControl(app.Dispatcher, null, new ScriptedCard { Now = CardHolder.Winawdl });
+        Expect(left.Phase == RadioPhase.WifiLeftOff && left.SwapsCard
+               && left.LastLine == "Wi-Fi was left off when the radio last stopped.",
+               "the app starts and winawdl's driver still has the card -> it says Wi-Fi was left off");
+        var fine = new RadioControl(app.Dispatcher, null, new ScriptedCard { Now = CardHolder.Wifi });
+        var clone = new RadioControl(app.Dispatcher, null);
+        Expect(fine.Phase == RadioPhase.Off && !clone.SwapsCard && clone.Phase == RadioPhase.Off,
+               "Wi-Fi has the card, or the app runs from a clone -> nothing to say");
     }
 
     private static void Supervisor(string logs)

@@ -45,8 +45,16 @@ public sealed class ScriptedRadio : IRadio
     public string LastLine { get; private set; } = "";
     public string LogFolder => Path.GetTempPath();
     public bool FromSource { get; set; } = true;
+    public bool SwapsCard { get; set; }
     public event Action? Changed;
     public int Starts { get; private set; }
+    public int GiveBacks { get; private set; }
+
+    public void GiveWifiBack()
+    {
+        GiveBacks++;
+        Become(RadioPhase.GivingBack);
+    }
 
     public void Start()
     {

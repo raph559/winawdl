@@ -57,7 +57,8 @@ public static class Program
         var repo = Repo.Find();
         var settings = SettingsStore.Load();
         var engine = new EngineProcess(app.Dispatcher, repo, engineArguments);
-        var radio = new RadioControl(app.Dispatcher, repo);
+        var radio = new RadioControl(app.Dispatcher, repo,
+                                     repo is not null && !Repo.IsSourceTree(repo) ? new WindowsCard() : null);
         var model = new TableModel(engine, radio, new Desk(app.Dispatcher), settings);
         var window = new MainWindow(model, theme, settings);
         using var tray = new Tray(window, () =>

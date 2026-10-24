@@ -17,7 +17,9 @@ public interface IEngine
     void Stop();
 }
 
-public enum RadioPhase { Off, Starting, Running, Stopping, Refused, NotBuilt, Failed }
+/// <summary>TakingCard and GivingBack are the Wi-Fi card moving between Windows' Wi-Fi and the
+/// radio; WifiLeftOff is winawdl's driver holding it with no radio running.</summary>
+public enum RadioPhase { Off, TakingCard, Starting, Running, Stopping, GivingBack, Refused, NotBuilt, Failed, WifiLeftOff }
 
 /// <summary>The radio and AWDL daemons, which run elevated and apart from the app.</summary>
 public interface IRadio
@@ -29,10 +31,14 @@ public interface IRadio
     /// <summary>The app runs from a clone of the repository, whose programs are
     /// built there, and not from an installed copy.</summary>
     bool FromSource { get; }
+    /// <summary>The radio takes the Wi-Fi card from Windows and gives it back: an installed copy.</summary>
+    bool SwapsCard { get; }
     event Action Changed;
 
     void Start();
     void Stop();
+    /// <summary>Gives the Wi-Fi card back to Windows, asking Windows for permission first.</summary>
+    void GiveWifiBack();
     /// <summary>The AWDL adapter came up or went away.</summary>
     void Linked(bool up);
 }
