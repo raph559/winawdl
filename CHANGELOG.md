@@ -3,8 +3,11 @@
 What each tagged state of the project holds. The measurements behind the
 numbers are in [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-## 0.4.0, not tagged yet
+## 0.4.0, 2026-11-04
 
+- **Received files drag out of the window.** A file on the Received shelf
+  drags as Explorer drags one, under its own picture, and lands as a copy in
+  a folder, a mail or a chat. Let go on a device in the window, it is sent.
 - **The Radio switch takes the Wi-Fi card and gives it back.** Turning the
   radio on takes the card from Windows' Wi-Fi; turning it off gives it back,
   once the radio has let go of it, with no restart. The window says which

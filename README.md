@@ -28,8 +28,8 @@ installing anything.
 | Receiving | Photos, a 28 MB video and a Live Photo have arrived from an iPhone, at about 16 MB/s |
 | Sending | Files have gone into the iPhone's Photos at 9 to 14 MB/s |
 | The app | One window over both. Through it the radio has been started and stopped, and Live Photos of 6 MB received from the iPhone and small files sent to it, with requests answered from a card on screen. Large transfers through it have not been tried |
-| The installer | A setup program that signs the driver on the PC it runs on and leaves Wi-Fi as it is, and undoes it all when uninstalled. Up to 0.3.0 it has run in full on the PC it was made on, and on no other |
-| Wi-Fi and the radio | From 0.4.0 the Radio switch takes the card from Windows' Wi-Fi and gives it back when the radio stops, when the app quits, and when Windows starts. Not yet run on the card |
+| The installer | A setup program that signs the driver on the PC it runs on and leaves Wi-Fi as it is, and undoes it all when uninstalled. It has run in full on the PC it was made on, 0.4.0 over 0.3.0, and on no other |
+| Wi-Fi and the radio | From 0.4.0 the Radio switch takes the card from Windows' Wi-Fi and gives it back when the radio stops, when the app quits, and when Windows starts. On the card it has been taken and given back with the switch and when the app ended, its saved networks with it. A start of Windows with the radio left on has not happened yet |
 | Not there | Contacts Only, in either direction. Any card but the RTL8852CE |
 
 All of it has run on one machine, with one card, against one iPhone.
