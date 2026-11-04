@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using Winawdl.Model;
+using Winawdl.Shell;
 using Winawdl.Theme;
 
 namespace Winawdl.Views;
@@ -89,6 +90,60 @@ public partial class MainView : UserControl
     {
         if (FilesIn(e) is { } files && (sender as FrameworkElement)?.DataContext is PeerModel peer)
             Model?.SendTo(peer, files);
+        e.Handled = true;
+    }
+
+    /// <summary>A received file carried out of the window, from where it was
+    /// pressed. Null when nothing is being carried out.</summary>
+    private string? _carried;
+    private Point? _grabbedAt;
+
+    private void OnFileGrabbed(object sender, MouseButtonEventArgs e) =>
+        _grabbedAt = e.GetPosition((IInputElement)sender);
+
+    private void OnFileCarried(object sender, MouseEventArgs e)
+    {
+        if (_grabbedAt is not { } start || sender is not Button button) return;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            _grabbedAt = null;
+            return;
+        }
+        var moved = e.GetPosition(button) - start;
+        if (Math.Abs(moved.X) < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(moved.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+        _grabbedAt = null;
+        if (button.DataContext is not FileItem file) return;
+        _carried = file.Path;
+        try
+        {
+            Drag.Out(button, file.Path);
+        }
+        finally
+        {
+            _carried = null;
+            Hand.IsTarget = false;
+            // The press ended outside the button's sight; without this it would stay sunk.
+            button.ReleaseMouseCapture();
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>A received file let go on the shelf it came from stays there,
+    /// rather than going into the hand to be sent.</summary>
+    private void OnDragOverShelf(object sender, DragEventArgs e)
+    {
+        if (_carried is null) return;
+        e.Effects = DragDropEffects.None;
+        Hand.IsTarget = false;
+        e.Handled = true;
+    }
+
+    private void OnDropOnShelf(object sender, DragEventArgs e)
+    {
+        if (_carried is null) return;
+        Hand.IsTarget = false;
         e.Handled = true;
     }
 

@@ -228,7 +228,8 @@
             <TextBlock Style="{StaticResource Label}" Text="Received" VerticalAlignment="Center" />
           </DockPanel>
           <t:Well Radius="18" Fill="{DynamicResource Well}" Edge="{DynamicResource Edge}"
-                  Outline="{DynamicResource Outline}" ShadeStrength="{DynamicResource ShadeStrength}">
+                  Outline="{DynamicResource Outline}" ShadeStrength="{DynamicResource ShadeStrength}"
+                  DragEnter="OnDragOverShelf" DragOver="OnDragOverShelf" Drop="OnDropOnShelf">
             <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
                           Focusable="False">
               <ItemsControl ItemsSource="{Binding Received}" Focusable="False" Margin="10,12,10,8">
@@ -242,6 +243,7 @@
                     <StackPanel Width="76" Margin="2,0" Tag="drop" Loaded="OnArrived">
                       <Button Style="{StaticResource FileButton}" Width="64" Height="64"
                               Command="{Binding Press}" ToolTip="{Binding Hint}"
+                              PreviewMouseLeftButtonDown="OnFileGrabbed" PreviewMouseMove="OnFileCarried"
                               AutomationProperties.Name="{Binding Name}" RenderTransformOrigin="0.5,0.5">
                         <Button.RenderTransform>
                           <RotateTransform Angle="{Binding Turn}" />

@@ -36,6 +36,12 @@ bottom: what you are holding and what you have been given. Sending moves
 things up, receiving moves them down. Every screen keeps that arrangement, so
 where something is says whose it is.
 
+What you have been given can be picked up again. A received file drags off
+the shelf as Explorer drags one, under its own picture, and lands as a copy
+wherever it is let go: a folder, a mail, a chat. The shelf keeps it, so it is
+never moved away. Let go on a device it is sent, in the hand it is held to
+send, and back on the shelf nothing happens.
+
 ### Depth
 
 Three levels, and each means one thing.

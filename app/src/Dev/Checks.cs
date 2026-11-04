@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using Winawdl.Engine;
 using Winawdl.Model;
@@ -40,6 +42,7 @@ public static class Checks
             States(app);
             Card();
             RadioWatch(app);
+            Carrying(folder);
             Supervisor(Path.Combine(folder, "supervised"));
         }
         catch (Exception error)
@@ -111,6 +114,31 @@ public static class Checks
                "a device's kind comes from the model it reports");
         Expect(Words.Percent(0.999) == "99%" && Words.Percent(1) == "100%" && Words.Percent(-1) == "0%",
                "a percentage never shows 100 before the end");
+    }
+
+    /// <summary>What a received file carries when it is dragged out of the window.</summary>
+    private static void Carrying(string folder)
+    {
+        var path = Path.Combine(folder, "carried photo.jpg");
+        File.WriteAllBytes(path, [0xFF, 0xD8, 0xFF, 0xD9]);
+        var data = Drag.ShellData(path);
+        string[] carried = [];
+        if (data != IntPtr.Zero)
+        {
+            try
+            {
+                var wrapped = new DataObject(
+                    (System.Runtime.InteropServices.ComTypes.IDataObject)Marshal.GetObjectForIUnknown(data));
+                carried = wrapped.GetData(DataFormats.FileDrop) as string[] ?? [];
+            }
+            finally
+            {
+                Marshal.Release(data);
+            }
+        }
+        Expect(carried.SequenceEqual([path]), $"a received file dragged out carries its own path, as Explorer's drag does: {string.Join(", ", carried)}");
+        File.Delete(path);
+        Expect(!Drag.Out(new Border(), path), "a received file that is gone from the folder is not dragged");
     }
 
     private static MainView Show(Stage.World world)
